@@ -1,5 +1,8 @@
 Cassandra appender for Log4j.
 
+Experimental CQL/Native transport port
+!!!NOT READY FOR PRODUCTION!!!
+
 Motivation and usage.
 ----------------------
 Log4j is widely used as logging tool. A Cassandra implementation
