@@ -7,16 +7,13 @@ import java.nio.charset.Charset;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import com.datastax.logging.util.CassandraClient;
-import org.apache.cassandra.thrift.Cassandra;
-import org.apache.cassandra.thrift.ColumnDef;
-import org.apache.cassandra.thrift.Column;
-import org.apache.cassandra.thrift.CfDef;
-import org.apache.cassandra.thrift.ColumnOrSuperColumn;
-import org.apache.cassandra.thrift.ConsistencyLevel;
-import org.apache.cassandra.thrift.KsDef;
-import org.apache.cassandra.thrift.Mutation;
-import org.apache.cassandra.thrift.NotFoundException;
+import com.datastax.driver.core.Cluster;
+import com.datastax.driver.core.ConsistencyLevel;
+import com.datastax.driver.core.Host;
+import com.datastax.driver.core.Metadata;
+import com.datastax.driver.core.Session;
+import com.datastax.driver.core.policies.DCAwareRoundRobinPolicy;
+
 import org.apache.commons.lang.StringUtils;
 import org.apache.log4j.AppenderSkeleton;
 import org.apache.log4j.Level;
@@ -25,7 +22,6 @@ import org.apache.log4j.helpers.LogLog;
 import org.apache.log4j.spi.ErrorCode;
 import org.apache.log4j.spi.LocationInfo;
 import org.apache.log4j.spi.LoggingEvent;
-
 import org.codehaus.jackson.map.ObjectMapper;
 
 /**
@@ -34,6 +30,7 @@ import org.codehaus.jackson.map.ObjectMapper;
  */
 public class CassandraAppender extends AppenderSkeleton
 {
+	
     private static final ObjectMapper jsonMapper = new ObjectMapper();
 
     // CF column names
@@ -69,11 +66,10 @@ public class CassandraAppender extends AppenderSkeleton
 
     private int maxBufferedRows = 1; // buffering is turned off by default
 
-    private Map<ByteBuffer, Map<String, List<Mutation>>> rowBuffer;
-
     private AtomicBoolean clientInitialized = new AtomicBoolean(false);
-    private Cassandra.Iface client;
-    
+    private Cluster cluster;
+    private Session session;
+    	
     private static final String ip = getIP();
     private static final String hostname = getHostName();
     
@@ -97,7 +93,7 @@ public class CassandraAppender extends AppenderSkeleton
      */
     public void close()
     {
-        flush();
+        //flush();
     }
 
     /**
@@ -115,7 +111,7 @@ public class CassandraAppender extends AppenderSkeleton
      */
     public void activateOptions()
     {
-        reset();
+        //reset();
     }
     
     private synchronized void initClient()
@@ -136,7 +132,19 @@ public class CassandraAppender extends AppenderSkeleton
         {
             try
             {
-                client = CassandraClient.openConnection(hosts, port);
+            	//FIXME pick up dc from config
+                cluster =  Cluster.builder()
+                        .addContactPoint(hosts)
+                        .withLoadBalancingPolicy(new DCAwareRoundRobinPolicy("datacenter1"))
+                        .build();
+                Metadata metadata = cluster.getMetadata();
+                System.out.printf("Connected to cluster: %s\n", 
+                      metadata.getClusterName());
+                for ( Host host : metadata.getAllHosts() ) {
+                   System.out.printf("Datacenter: %s; Host: %s; Rack: %s\n",
+                      host.getDatacenter(), host.getAddress(), host.getRack());
+                }
+                session = cluster.connect();
             }
             catch (Exception e)
             {
@@ -156,7 +164,7 @@ public class CassandraAppender extends AppenderSkeleton
     
             try
             {
-                client.set_keyspace(keyspaceName);
+            	session.execute("use " + keyspaceName + ";");
             }
             catch (Exception e)
             {
@@ -179,6 +187,7 @@ public class CassandraAppender extends AppenderSkeleton
     @Override
     protected void append(LoggingEvent event)
     {
+    	System.out.println("entering appender");
         // We have to defer initialization of the client because ITransportFactory
         // references some Hadoop classes which can't safely be
         // used until the logging infrastructure is fully set up. If we attempt to
@@ -191,126 +200,117 @@ public class CassandraAppender extends AppenderSkeleton
             initClient();
         }
         
-        ByteBuffer rowId = toByteBuffer(UUID.randomUUID());
-        Map<String, List<Mutation>> mutMap = new HashMap<String, List<Mutation>>();
-        mutMap.put(columnFamily, createMutationList(event));
-        rowBuffer.put(rowId, mutMap);
-
-        flushIfNecessary();
+        String query = createQuery(event);
+        session.execute(query);
     }
 
-    private void flushIfNecessary()
-    {
-        if (rowBuffer.size() >= maxBufferedRows)
-            flush();
-    }
+    private String createQuery(LoggingEvent event) {
+    	StringBuilder queryCols = new StringBuilder();
+    	queryCols.append("APP_NAME,HOST_IP,HOST_NAME, LOGGER_NAME, LEVEL");
+    	StringBuilder queryVals = new StringBuilder();
+    	
+    	queryVals.append("'" + appName + "'," + 
+		"'" + ip + "'," + 
+		"'" + hostname + "'," +
+		"'" + event.getLoggerName() + "'," +
+		"'" + event.getLevel().toString() + "'");
+    	
+    	
 
-    private void flush()
+    	
+    	LocationInfo locInfo = event.getLocationInformation();
+      if (locInfo != null)
+      {
+    	  queryCols.append(",CLASS_NAME,FILE_NAME,LINE_NUMBER,METHOD_NAME");
+    	  queryVals.append(",'" + locInfo.getClassName() + "','" + locInfo.getFileName() + "'," + locInfo.getLineNumber() + ",'" + locInfo.getMethodName() + "'");
+      }
+      
+      queryCols.append(",MESSAGE,NDC,APP_START_TIME,THREAD_NAME");
+      queryVals.append(",'" + event.getRenderedMessage() + "','" + event.getNDC() + "','" + LoggingEvent.getStartTime() + "','" + event.getThreadName() + "'");
+          	
+      String[] throwableStrs = event.getThrowableStrRep();
+    if (throwableStrs != null)
     {
-        if (rowBuffer.size() > 0)
+        StringBuilder builder = new StringBuilder();
+        for (String throwableStr : throwableStrs)
         {
-            try
-            {
-                client.batch_mutate(rowBuffer, consistencyLevelWrite);
-            }
-            catch (Exception e)
-            {
-                errorHandler.error("Failed to persist in Cassandra", e, ErrorCode.FLUSH_FAILURE);
-            }
-            reset();
+            builder.append(throwableStr);
         }
+    	queryCols.append(",THROWABLE_STR");
+    	queryVals.append(",'" + builder.toString() + "'");
+    }
+    
+    queryCols.append(",TIMESTAMP");
+    queryVals.append("," + event.getTimeStamp());
+    	String query = "insert into log (" + queryCols + ") " + "values (" + queryVals + ")";
+    	System.out.println(query);
+    	return query.toString(); 
     }
 
-    private void reset()
-    {
-        rowBuffer = new HashMap<ByteBuffer, Map<String, List<Mutation>>>();
-    }
-
-    private List<Mutation> createMutationList(LoggingEvent event)
-    {
-        List<Mutation> mutList = new ArrayList<Mutation>();
-
-        long colTs = System.currentTimeMillis() * 1000; // don't use log entry timestamp for column timestamp to avoid
-                                                        // clock skew issues
-        createMutation(mutList, APP_NAME, appName, colTs);
-        createMutation(mutList, HOST_IP, ip, colTs);
-        createMutation(mutList, HOST_NAME, hostname, colTs);
-        createMutation(mutList, LOGGER_NAME, event.getLoggerName(), colTs);
-        createMutation(mutList, LEVEL, event.getLevel().toString(), colTs);
-        LocationInfo locInfo = event.getLocationInformation();
-        if (locInfo != null)
-        {
-            createMutation(mutList, CLASS_NAME, locInfo.getClassName(), colTs);
-            createMutation(mutList, FILE_NAME, locInfo.getFileName(), colTs);
-            createMutation(mutList, LINE_NUMBER, locInfo.getLineNumber(), colTs);
-            createMutation(mutList, METHOD_NAME, locInfo.getMethodName(), colTs);
-        }
-        createMutation(mutList, MESSAGE, event.getRenderedMessage(), colTs);
-        createMutation(mutList, NDC, event.getNDC(), colTs);
-        createMutation(mutList, APP_START_TIME, LoggingEvent.getStartTime(), colTs);
-        createMutation(mutList, THREAD_NAME, event.getThreadName(), colTs);
-        String[] throwableStrs = event.getThrowableStrRep();
-        if (throwableStrs != null)
-        {
-            StringBuilder builder = new StringBuilder();
-            for (String throwableStr : throwableStrs)
-            {
-                builder.append(throwableStr);
-            }
-            createMutation(mutList, THROWABLE_STR, builder.toString(), colTs);
-        }
-        createMutation(mutList, TIMESTAMP, event.getTimeStamp(), colTs);
-
-        return mutList;
-    }
-
-    private void createMutation(List<Mutation> mutList, String column, long value, long ts)
-    {
-        createMutation(mutList, column, toByteBuffer(value), ts);
-    }
-
-    private void createMutation(List<Mutation> mutList, String column, String value, long ts)
-    {
-        if (value != null)
-        {
-            createMutation(mutList, column, toByteBuffer(value), ts);
-        }
-    }
-
-    private void createMutation(List<Mutation> mutList, String column, ByteBuffer value, long ts)
-    {
-        Mutation mutation = new Mutation();
-        Column col = new Column(toByteBuffer(column));
-        col.setValue(value);
-        col.setTimestamp(ts);
-        ColumnOrSuperColumn cosc = new ColumnOrSuperColumn().setColumn(col);
-        mutation.setColumn_or_supercolumn(cosc);
-        mutList.add(mutation);
-    }
 
     /**
      * Create Keyspace and CF if they do not exist.
      */
-    private void setupSchema() throws IOException
+   private void setupSchema() throws IOException
     {
+	   
+	   String ksQuery = "CREATE KEYSPACE IF NOT EXISTS logging WITH replication = {'class': 'SimpleStrategy','replication_factor': '1'};";
 
-        KsDef ksDef = verifyKeyspace();
-        if (ksDef == null)
-        {
-            // create both
-            createKeyspaceAndColFam();
-        }
-        else
-        {
-            // keyspace exists, does the cf?
+	   
+	   String cfQuery = "CREATE TABLE IF NOT EXISTS logging.log ( " +
+			   "host_ip text, " +
+			   "host_name text," +
+			   "app_name text," +
+			   "\"timestamp\" timestamp," +
+			   "app_start_time timestamp," +
+			   "class_name text," +
+			   "file_name text," +
+			   "level text," +
+			   "line_number int," +
+			   "logger_name text," +
+			   "message text," +
+			   "method_name text," +
+			   "ndc text," +
+			   "thread_name text," +
+			   "throwable_str text," +
+			   "PRIMARY KEY ((host_ip, host_name, app_name), \"timestamp\")" +
+			 ") WITH CLUSTERING ORDER BY (\"timestamp\" DESC) AND" +
+			  " bloom_filter_fp_chance=0.010000 AND" +
+			  " caching='KEYS_ONLY' AND" +
+			  " comment='' AND" +
+			  " dclocal_read_repair_chance=0.000000 AND" +
+			  " gc_grace_seconds=864000 AND" +
+			  " index_interval=128 AND" +
+			  " read_repair_chance=0.100000 AND" +
+			  " replicate_on_write='true' AND" +
+			  " populate_io_cache_on_flush='false' AND" +
+			  " default_time_to_live=0 AND" +
+			  " speculative_retry='NONE' AND" +
+			  " memtable_flush_period_in_ms=0 AND" +
+			  " compaction={'class': 'SizeTieredCompactionStrategy'} AND " +
+			  " compression={'sstable_compression': 'LZ4Compressor'};";
 
-            if (!checkForCF(ksDef))
-            {
-                // create cf
-                createColumnFamily();
-            }
-        }
+	   session.execute(ksQuery);
+	   session.execute(cfQuery);
     }
+
+//        KsDef ksDef = verifyKeyspace();
+//        if (ksDef == null)
+//        {
+//            // create both
+//            createKeyspaceAndColFam();
+//        }
+//        else
+//        {
+//            // keyspace exists, does the cf?
+//
+//            if (!checkForCF(ksDef))
+//            {
+//                // create cf
+//                createColumnFamily();
+//            }
+//        }
+//    }
 
     public String getKeyspaceName()
     {
@@ -434,142 +434,8 @@ public class CassandraAppender extends AppenderSkeleton
         this.appName = appName;
     }
         
-    /*
-     * Verify that the keyspace exists. Returns the KsDef if it does, else null.
-     */
-    private KsDef verifyKeyspace()
-            throws IOException
-    {
 
-        KsDef ksDef = null;
 
-        try
-        {
-            ksDef = client.describe_keyspace(keyspaceName);
-            // it exists, fall through to return positive
-        }
-        catch (NotFoundException e)
-        {
-            // doesn't exist
-        }
-        catch (Exception e)
-        {
-            throw new IOException("Exception caught while trying to verify keyspace existance.", e);
-        }
-
-        return ksDef;
-    }
-
-    /*
-     * Check for CF in the given KS definition.
-     */
-    private boolean checkForCF(KsDef ksDef)
-    {
-        boolean exists = false;
-
-        for (CfDef cfDef : ksDef.getCf_defs())
-        {
-            if (cfDef.getName().equals(columnFamily))
-            {
-                exists = true;
-                break;
-            }
-        }
-
-        return exists;
-    }
-
-    private void createKeyspaceAndColFam()
-            throws IOException
-    {
-
-        List<CfDef> cfDefList = new ArrayList<CfDef>();
-        cfDefList.add(createCfDef());
-
-        try
-        {
-            KsDef ksDef = new KsDef(keyspaceName, placementStrategy, cfDefList);
-
-            if (placementStrategy.equals("org.apache.cassandra.locator.SimpleStrategy"))
-            {
-                if (!strategyOptions.containsKey("replication_factor"))
-                    strategyOptions.put("replication_factor", Integer.toString(replicationFactor));
-            }
-
-            ksDef.setStrategy_options(strategyOptions);
-
-            client.system_add_keyspace(ksDef);
-            int magnitude = client.describe_ring(keyspaceName).size();
-            Thread.sleep(1000 * magnitude);
-        }
-        catch (InterruptedException e)
-        {
-            throw new RuntimeException(e);
-        }
-        catch (Exception e)
-        {
-            throw new IOException(e);
-        }
-    }
-
-    private void createColumnFamily()
-            throws IOException
-    {
-
-        CfDef cfDef = createCfDef();
-        try
-        {
-            // keyspace should have already been verified...
-            client.set_keyspace(keyspaceName);
-            client.system_add_column_family(cfDef);
-            int magnitude = client.describe_ring(keyspaceName).size();
-            Thread.sleep(1000 * magnitude);
-        }
-        catch (InterruptedException e)
-        {
-            throw new RuntimeException(e);
-        }
-        catch (Exception e)
-        {
-            throw new IOException(e);
-        }
-    }
-
-    private CfDef createCfDef()
-    {
-        CfDef cfDef = new CfDef(keyspaceName, columnFamily);
-        cfDef.setKey_validation_class("UUIDType");
-        cfDef.setComparator_type("UTF8Type");
-        cfDef.setDefault_validation_class("UTF8Type");
-
-        addColumn(cfDef, APP_NAME, "UTF8Type");
-        addColumn(cfDef, HOST_IP, "UTF8Type");
-        addColumn(cfDef, HOST_NAME, "UTF8Type");
-        addColumn(cfDef, LOGGER_NAME, "UTF8Type");
-        addColumn(cfDef, LEVEL, "UTF8Type");
-        addColumn(cfDef, CLASS_NAME, "UTF8Type");
-        addColumn(cfDef, FILE_NAME, "UTF8Type");
-        addColumn(cfDef, LINE_NUMBER, "UTF8Type");
-        addColumn(cfDef, METHOD_NAME, "UTF8Type");
-        addColumn(cfDef, MESSAGE, "UTF8Type");
-        addColumn(cfDef, NDC, "UTF8Type");
-        addColumn(cfDef, APP_START_TIME, "LongType");
-        addColumn(cfDef, THREAD_NAME, "UTF8Type");
-        addColumn(cfDef, THROWABLE_STR, "UTF8Type");
-        addColumn(cfDef, TIMESTAMP, "LongType");
-
-        return cfDef;
-    }
-
-    private CfDef addColumn(CfDef cfDef, String columnName, String validator)
-    {
-        ColumnDef colDef = new ColumnDef();
-        colDef.setName(toByteBuffer(columnName));
-        colDef.setValidation_class(validator);
-        cfDef.addToColumn_metadata(colDef);
-
-        return cfDef;
-    }
 
     private static final Charset charset = Charset.forName("UTF-8");
 

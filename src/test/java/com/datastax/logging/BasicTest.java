@@ -3,12 +3,12 @@ package com.datastax.logging;
 
 import java.io.IOException;
 
-import org.apache.cassandra.thrift.ConsistencyLevel;
 import org.apache.log4j.Level;
 import org.apache.log4j.Logger;
 import org.junit.Before;
 import org.junit.Test;
 
+import com.datastax.driver.core.ConsistencyLevel;
 import com.datastax.logging.appender.CassandraAppender;
 
 /**
