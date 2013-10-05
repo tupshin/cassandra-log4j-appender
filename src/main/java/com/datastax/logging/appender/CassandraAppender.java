@@ -7,10 +7,12 @@ import java.nio.charset.Charset;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import com.datastax.driver.core.BoundStatement;
 import com.datastax.driver.core.Cluster;
 import com.datastax.driver.core.ConsistencyLevel;
 import com.datastax.driver.core.Host;
 import com.datastax.driver.core.Metadata;
+import com.datastax.driver.core.PreparedStatement;
 import com.datastax.driver.core.Session;
 import com.datastax.driver.core.policies.DCAwareRoundRobinPolicy;
 
@@ -200,33 +202,34 @@ public class CassandraAppender extends AppenderSkeleton
             initClient();
         }
         
-        String query = createQuery(event);
-        session.execute(query);
+        createAndExecuteQuery(event);
     }
 
-    private String createQuery(LoggingEvent event) {
-    	StringBuilder queryCols = new StringBuilder();
-    	queryCols.append("APP_NAME,HOST_IP,HOST_NAME, LOGGER_NAME, LEVEL");
-    	StringBuilder queryVals = new StringBuilder();
+    private void createAndExecuteQuery(LoggingEvent event) {
     	
-    	queryVals.append("'" + appName + "'," + 
-		"'" + ip + "'," + 
-		"'" + hostname + "'," +
-		"'" + event.getLoggerName() + "'," +
-		"'" + event.getLevel().toString() + "'");
+    	HashMap<String,Object> queryList = new HashMap<String,Object>();
     	
-    	
-
+    	queryList.put("APP_NAME",appName);
+    	queryList.put("HOST_IP",ip);
+    	queryList.put("HOST_NAME", hostname);
+    	queryList.put("LOGGER_NAME", event.getLoggerName());
+    	queryList.put("LEVEL", event.getLevel().toString());   	
     	
     	LocationInfo locInfo = event.getLocationInformation();
       if (locInfo != null)
       {
-    	  queryCols.append(",CLASS_NAME,FILE_NAME,LINE_NUMBER,METHOD_NAME");
-    	  queryVals.append(",'" + locInfo.getClassName() + "','" + locInfo.getFileName() + "'," + locInfo.getLineNumber() + ",'" + locInfo.getMethodName() + "'");
+    	  queryList.put("CLASS_NAME", locInfo.getClassName());
+    	  queryList.put("FILE_NAME", locInfo.getFileName());
+    	  queryList.put("LINE_NUMBER", locInfo.getLineNumber());
+    	  queryList.put("METHOD_NAME", locInfo.getMethodName());
+
       }
       
-      queryCols.append(",MESSAGE,NDC,APP_START_TIME,THREAD_NAME");
-      queryVals.append(",'" + event.getRenderedMessage() + "','" + event.getNDC() + "','" + LoggingEvent.getStartTime() + "','" + event.getThreadName() + "'");
+	  queryList.put("MESSAGE", event.getRenderedMessage());
+	  queryList.put("NDC", event.getNDC());
+	  //FIXME???
+	  queryList.put("APP_START_TIME", new Long(LoggingEvent.getStartTime()).toString());
+	  queryList.put("THREAD_NAME", event.getThreadName());
           	
       String[] throwableStrs = event.getThrowableStrRep();
     if (throwableStrs != null)
@@ -236,15 +239,21 @@ public class CassandraAppender extends AppenderSkeleton
         {
             builder.append(throwableStr);
         }
-    	queryCols.append(",THROWABLE_STR");
-    	queryVals.append(",'" + builder.toString() + "'");
+        queryList.put("THROWABLE_STR", builder.toString());
     }
+    //FIXME???
+    queryList.put("TIMESTAMP", new Long(event.getTimeStamp()).toString());    
     
-    queryCols.append(",TIMESTAMP");
-    queryVals.append("," + event.getTimeStamp());
-    	String query = "insert into log (" + queryCols + ") " + "values (" + queryVals + ")";
-    	System.out.println(query);
-    	return query.toString(); 
+    
+    String queryCols = StringUtils.join(queryList.keySet().toArray(), ",");
+	   String questionString = "?" + StringUtils.repeat(", ?", queryList.size()-1);
+
+	   System.out.println("INSERT INTO logging.log (" + queryCols + ") VALUES (" + questionString +")");
+
+	   PreparedStatement statement = session.prepare(
+			   "INSERT INTO logging.log (" + queryCols + ") VALUES (" + questionString +")");
+	   BoundStatement bound = new BoundStatement(statement);
+	   session.execute(bound.bind(queryList.values().toArray()));
     }
 
 
@@ -261,12 +270,12 @@ public class CassandraAppender extends AppenderSkeleton
 			   "host_ip text, " +
 			   "host_name text," +
 			   "app_name text," +
-			   "\"timestamp\" timestamp," +
-			   "app_start_time timestamp," +
+			   "\"timestamp\" text," +
+			   "app_start_time text," +
 			   "class_name text," +
 			   "file_name text," +
 			   "level text," +
-			   "line_number int," +
+			   "line_number text," +
 			   "logger_name text," +
 			   "message text," +
 			   "method_name text," +
@@ -293,24 +302,6 @@ public class CassandraAppender extends AppenderSkeleton
 	   session.execute(ksQuery);
 	   session.execute(cfQuery);
     }
-
-//        KsDef ksDef = verifyKeyspace();
-//        if (ksDef == null)
-//        {
-//            // create both
-//            createKeyspaceAndColFam();
-//        }
-//        else
-//        {
-//            // keyspace exists, does the cf?
-//
-//            if (!checkForCF(ksDef))
-//            {
-//                // create cf
-//                createColumnFamily();
-//            }
-//        }
-//    }
 
     public String getKeyspaceName()
     {
