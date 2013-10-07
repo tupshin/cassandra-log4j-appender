@@ -121,6 +121,8 @@ public class CassandraAppender extends AppenderSkeleton {
 			return;
 		}
 
+		String[] contactPoints = hosts.split(",\\s*");
+
 		// Just while we initialise the client, we must temporarily
 		// disable all logging or else we get into an infinite loop
 		Level globalThreshold = LogManager.getLoggerRepository().getThreshold();
@@ -131,7 +133,7 @@ public class CassandraAppender extends AppenderSkeleton {
 				// FIXME pick up dc from config
 				cluster = Cluster
 						.builder()
-						.addContactPoint(hosts)
+						.addContactPoints(contactPoints)
 						.withPort(port)
 						.withCredentials(username, password)
 						.withLoadBalancingPolicy(
