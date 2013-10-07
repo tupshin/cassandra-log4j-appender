@@ -69,6 +69,10 @@ public class CassandraAppender extends AppenderSkeleton {
 
 	private static final String ip = getIP();
 	private static final String hostname = getHostName();
+	
+	private String primaryKeyCols = "host_ip, host_name, app_name";
+	
+	
 
 	/**
 	 * Cassandra comma separated hosts.
@@ -265,7 +269,7 @@ public class CassandraAppender extends AppenderSkeleton {
 				+ "file_name text," + "level text," + "line_number text,"
 				+ "logger_name text," + "message text," + "method_name text,"
 				+ "ndc text," + "thread_name text," + "throwable_str text,"
-				+ "PRIMARY KEY ((host_ip, host_name, app_name), \"timestamp\")"
+				+ "PRIMARY KEY ((" + primaryKeyCols + "), \"timestamp\")"
 				+ ") WITH CLUSTERING ORDER BY (\"timestamp\" DESC) AND"
 				+ " bloom_filter_fp_chance=0.010000 AND"
 				+ " caching='KEYS_ONLY' AND" + " comment='' AND"
@@ -430,5 +434,13 @@ public class CassandraAppender extends AppenderSkeleton {
 		if (b.charAt(0) == '\"' && b.charAt(b.length() - 1) == '\"')
 			b = b.substring(1, b.length() - 1);
 		return b;
+	}
+
+	public String getPrimaryKeyCols() {
+		return primaryKeyCols;
+	}
+
+	public void setPrimaryKeyCols(String primaryKeyCols) {
+		this.primaryKeyCols = primaryKeyCols;
 	}
 }
