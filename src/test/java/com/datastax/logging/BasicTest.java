@@ -46,39 +46,5 @@ public class BasicTest
         new CassandraAppender().setConsistencyLevelWrite("QIORUM");
     }
 
-    @Test
-    public void testSettingPlacementStrategy()
-    {
-        CassandraAppender cassApp = new CassandraAppender();
-        cassApp.setPlacementStrategy("org.apache.cassandra.locator.SimpleStrategy");
-        cassApp.setPlacementStrategy("org.apache.cassandra.locator.NetworkTopologyStrategy");
-    }
 
-    @Test (expected = IllegalArgumentException.class)
-    public void testSettingNullPlacementStrategy()
-    {
-        new CassandraAppender().setPlacementStrategy(null);
-    }
-
-    @Test
-    public void testSettingStrategyOptions()
-    {
-        CassandraAppender appender = new CassandraAppender();
-
-        appender.setStrategyOptions("{ \"DC1\" : \"2\"}");
-        appender.setStrategyOptions("{ \"1\" : \"2\", \"DC1\" : \"15\" }");
-        appender.setStrategyOptions("{ \"hello\" : \"2\", \"500\" : \"Rack12\" }");
-    }
-
-    @Test (expected = IllegalArgumentException.class)
-    public void testSettingNullStrategyOptions()
-    {
-        new CassandraAppender().setStrategyOptions(null);
-    }
-
-    @Test (expected = IllegalArgumentException.class)
-    public void testSettingInvalidStrategyOptions()
-    {
-        new CassandraAppender().setStrategyOptions("{ \"hell : \"o1\" }");
-    }
 }

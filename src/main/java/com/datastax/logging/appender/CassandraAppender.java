@@ -60,8 +60,7 @@ public class CassandraAppender extends AppenderSkeleton {
 
 	private String dcName = "datacenter1";
 
-	private String placementStrategy = "SimpleStrategy";
-	private String strategyOptions = "'replication_factor':1";
+	private String replication = "{'class': 'SimpleStrategy', 'datacenter1' : 1};";
 
 	private ConsistencyLevel consistencyLevelWrite = ConsistencyLevel.ONE;
 
@@ -255,8 +254,7 @@ public class CassandraAppender extends AppenderSkeleton {
 	private void setupSchema() throws IOException {
 
 		String ksQuery = "CREATE KEYSPACE IF NOT EXISTS " + keyspaceName
-				+ " WITH replication = {'class': '" + placementStrategy + "',"
-				+ strategyOptions + "};";
+				+ " WITH replication = " + replication + ";";
 
 		String cfQuery = "CREATE TABLE IF NOT EXISTS " + keyspaceName + "."
 				+ columnFamily + " ( " + "host_ip text, " + "host_name text,"
@@ -331,24 +329,12 @@ public class CassandraAppender extends AppenderSkeleton {
 		this.columnFamily = columnFamily;
 	}
 
-	public String getPlacementStrategy() {
-		return placementStrategy;
+	public String getReplication() {
+		return replication;
 	}
 
-	public void setPlacementStrategy(String strategy) {
-		if (strategy == null)
-			throw new IllegalArgumentException(
-					"placementStrategy can't be null");
-
-		placementStrategy = unescape(strategy);
-	}
-
-	public String getStrategyOptions() {
-		return strategyOptions;
-	}
-
-	public void setStrategyOptions(String newOptions) {
-		strategyOptions = newOptions;
+	public void setReplication(String strategy) {
+		replication = unescape(strategy);
 	}
 
 	public String getConsistencyLevelWrite() {
