@@ -4,17 +4,9 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
-import java.util.*;
+import java.util.HashMap;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
-
-import com.datastax.driver.core.BoundStatement;
-import com.datastax.driver.core.Cluster;
-import com.datastax.driver.core.ConsistencyLevel;
-import com.datastax.driver.core.Host;
-import com.datastax.driver.core.Metadata;
-import com.datastax.driver.core.PreparedStatement;
-import com.datastax.driver.core.Session;
-import com.datastax.driver.core.policies.DCAwareRoundRobinPolicy;
 
 import org.apache.commons.lang.StringUtils;
 import org.apache.log4j.AppenderSkeleton;
@@ -24,6 +16,15 @@ import org.apache.log4j.helpers.LogLog;
 import org.apache.log4j.spi.LocationInfo;
 import org.apache.log4j.spi.LoggingEvent;
 import org.codehaus.jackson.map.ObjectMapper;
+
+import com.datastax.driver.core.BoundStatement;
+import com.datastax.driver.core.Cluster;
+import com.datastax.driver.core.ConsistencyLevel;
+import com.datastax.driver.core.Host;
+import com.datastax.driver.core.Metadata;
+import com.datastax.driver.core.PreparedStatement;
+import com.datastax.driver.core.Session;
+import com.datastax.driver.core.policies.DCAwareRoundRobinPolicy;
 
 /**
  * Main class that uses Cassandra to store log entries into.
@@ -80,6 +81,8 @@ public class CassandraAppender extends AppenderSkeleton {
 	 * Cassandra port.
 	 */
 	private int port = 9042;
+	private String username = "";
+	private String password = "";
 
 	public CassandraAppender() {
 		LogLog.debug("Creating CassandraAppender");
@@ -89,7 +92,9 @@ public class CassandraAppender extends AppenderSkeleton {
 	 * {@inheritDoc}
 	 */
 	public void close() {
-		// flush();
+		System.out.println("shutting down");
+		session.shutdown();
+		cluster.shutdown();
 	}
 
 	/**
@@ -128,6 +133,7 @@ public class CassandraAppender extends AppenderSkeleton {
 						.builder()
 						.addContactPoint(hosts)
 						.withPort(port)
+						.withCredentials(username, password)
 						.withLoadBalancingPolicy(
 								new DCAwareRoundRobinPolicy(dcName)).build();
 
@@ -296,6 +302,22 @@ public class CassandraAppender extends AppenderSkeleton {
 
 	public void setPort(int port) {
 		this.port = port;
+	}
+
+	public String getUsername() {
+		return username;
+	}
+
+	public void setUsername(String username) {
+		this.username = username;
+	}
+
+	public String getPassword() {
+		return password;
+	}
+
+	public void setPassword(String password) {
+		this.password = password;
 	}
 
 	public String getColumnFamily() {
