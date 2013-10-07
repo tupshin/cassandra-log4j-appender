@@ -15,7 +15,6 @@ import org.apache.log4j.LogManager;
 import org.apache.log4j.helpers.LogLog;
 import org.apache.log4j.spi.LocationInfo;
 import org.apache.log4j.spi.LoggingEvent;
-import org.codehaus.jackson.map.ObjectMapper;
 
 import com.datastax.driver.core.BoundStatement;
 import com.datastax.driver.core.Cluster;
@@ -31,8 +30,6 @@ import com.datastax.driver.core.policies.DCAwareRoundRobinPolicy;
  * 
  */
 public class CassandraAppender extends AppenderSkeleton {
-
-	private static final ObjectMapper jsonMapper = new ObjectMapper();
 
 	// CF column names
 	public static final String HOST_IP = "host_ip";
@@ -59,6 +56,8 @@ public class CassandraAppender extends AppenderSkeleton {
 	private String appName = "default";
 
 	private String dcName = "datacenter1";
+	
+	private PreparedStatement statement;
 
 	private String replication = "{'class': 'SimpleStrategy', 'datacenter1' : 1};";
 
@@ -181,7 +180,6 @@ public class CassandraAppender extends AppenderSkeleton {
 	 */
 	@Override
 	protected void append(LoggingEvent event) {
-		System.out.println("entering appender");
 		// We have to defer initialization of the client because
 		// ITransportFactory
 		// references some Hadoop classes which can't safely be
@@ -226,24 +224,28 @@ public class CassandraAppender extends AppenderSkeleton {
 		queryList.put("THREAD_NAME", event.getThreadName());
 
 		String[] throwableStrs = event.getThrowableStrRep();
+
+		StringBuilder throwableConcat = new StringBuilder("");
 		if (throwableStrs != null) {
-			StringBuilder builder = new StringBuilder();
+
 			for (String throwableStr : throwableStrs) {
-				builder.append(throwableStr);
+				throwableConcat.append(throwableStr);
 			}
-			queryList.put("THROWABLE_STR", builder.toString());
+
 		}
+		queryList.put("THROWABLE_STR", throwableConcat.toString());
 		// FIXME???
 		queryList.put("TIMESTAMP", new Long(event.getTimeStamp()).toString());
 
 		String queryCols = StringUtils.join(queryList.keySet().toArray(), ",");
-		String questionString = "?"
-				+ StringUtils.repeat(", ?", queryList.size() - 1);
-
-		PreparedStatement statement = session.prepare("INSERT INTO "
-				+ keyspaceName + "." + columnFamily + " (" + queryCols
-				+ ") VALUES (" + questionString + ")");
-		statement.setConsistencyLevel(ConsistencyLevel.valueOf(consistencyLevelWrite.toString()));
+		String questionString = "?" + StringUtils.repeat(", ?", queryList.size() - 1);
+		if (statement == null) {
+			statement = session.prepare("INSERT INTO " + keyspaceName + "."
+					+ columnFamily + " (" + queryCols + ") VALUES ("
+					+ questionString + ")");
+			statement.setConsistencyLevel(ConsistencyLevel
+					.valueOf(consistencyLevelWrite.toString()));
+		}
 		BoundStatement bound = new BoundStatement(statement);
 		session.execute(bound.bind(queryList.values().toArray()));
 	}
