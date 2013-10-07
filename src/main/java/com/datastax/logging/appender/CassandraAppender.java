@@ -244,6 +244,7 @@ public class CassandraAppender extends AppenderSkeleton {
 		PreparedStatement statement = session.prepare("INSERT INTO "
 				+ keyspaceName + "." + columnFamily + " (" + queryCols
 				+ ") VALUES (" + questionString + ")");
+		statement.setConsistencyLevel(ConsistencyLevel.valueOf(consistencyLevelWrite.toString()));
 		BoundStatement bound = new BoundStatement(statement);
 		session.execute(bound.bind(queryList.values().toArray()));
 	}
